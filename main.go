@@ -1,11 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
-	"io"
 	"math/rand"
 	"net/http"
 	"os"
@@ -17,7 +17,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-var imageFiles []string
+var (
+	imageFiles    []string
+	defaultWidth  = 800
+	defaultHeight = 600
+	minSize       = 10
+	maxWidth      = 1920
+	maxHeight     = 1080
+)
 
 func init() {
 	rand.Seed(time.Now().UnixNano())
@@ -63,81 +70,72 @@ func getRandomImage() (image.Image, string, error) {
 }
 
 func validateDimensions(width, height int) bool {
-	return width >= 10 && height >= 10 && width <= 1920 && height <= 1080
+	return width >= minSize && height >= minSize && width <= maxWidth && height <= maxHeight
+}
+
+func serveImage(c *gin.Context, width, height int) {
+	img, format, err := getRandomImage()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load image"})
+		return
+	}
+
+	// Масштабируем
+	resizedImg := imaging.Resize(img, width, height, imaging.Lanczos)
+
+	// Кодируем в память (используем bytes.Buffer)
+	buf := new(bytes.Buffer)
+	switch format {
+	case "jpeg":
+		err = jpeg.Encode(buf, resizedImg, nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "JPEG encoding failed"})
+			return
+		}
+		c.Data(http.StatusOK, "image/jpeg", buf.Bytes())
+	case "png":
+		err = png.Encode(buf, resizedImg)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "PNG encoding failed"})
+			return
+		}
+		c.Data(http.StatusOK, "image/png", buf.Bytes())
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unsupported image format"})
+	}
 }
 
 func main() {
 	r := gin.Default()
 
+	// Редирект с `/` на `/800/600`
 	r.GET("/", func(c *gin.Context) {
-		// Парсим параметры
-		width, err := strconv.Atoi(c.Query("width"))
+		c.Redirect(http.StatusMovedPermanently, fmt.Sprintf("/%d/%d", defaultWidth, defaultHeight))
+	})
+
+	// Обработка `/width/height`
+	r.GET("/:width/:height", func(c *gin.Context) {
+		width, err := strconv.Atoi(c.Param("width"))
 		if err != nil {
-			width = 0 // Автоподбор
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid width"})
+			return
 		}
 
-		height, err := strconv.Atoi(c.Query("height"))
+		height, err := strconv.Atoi(c.Param("height"))
 		if err != nil {
-			height = 0 // Автоподбор
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid height"})
+			return
 		}
 
-		// Валидация размеров
-		if width != 0 || height != 0 {
-			if !validateDimensions(width, height) {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": "Dimensions must be between 10x10 and 1920x1080",
-				})
-				return
-			}
-		}
-
-		// Получаем случайное изображение
-		img, format, err := getRandomImage()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to load image",
+		if !validateDimensions(width, height) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("Dimensions must be between %dx%d and %dx%d", minSize, minSize, maxWidth, maxHeight),
 			})
 			return
 		}
 
-		// Масштабируем (если нужно)
-		if width > 0 || height > 0 {
-			if width == 0 {
-				width = img.Bounds().Dx()
-			}
-			if height == 0 {
-				height = img.Bounds().Dy()
-			}
-			img = imaging.Resize(img, width, height, imaging.Lanczos)
-		}
-
-		// Отправляем изображение
-		switch format {
-		case "jpeg":
-			c.DataFromReader(http.StatusOK, -1, "image/jpeg", readerFromImage(img), nil)
-		case "png":
-			c.DataFromReader(http.StatusOK, -1, "image/png", readerFromImage(img), nil)
-		default:
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Unsupported image format",
-			})
-		}
+		serveImage(c, width, height)
 	})
 
 	r.Run(":8080")
-}
-
-// Вспомогательная функция для преобразования image.Image в io.Reader
-func readerFromImage(img image.Image) *io.PipeReader {
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		switch img.(type) {
-		case *image.RGBA:
-			jpeg.Encode(pw, img, nil)
-		case *image.NRGBA:
-			png.Encode(pw, img)
-		}
-	}()
-	return pr
 }
