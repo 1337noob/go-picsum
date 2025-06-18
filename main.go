@@ -80,10 +80,10 @@ func serveImage(c *gin.Context, width, height int) {
 		return
 	}
 
-	// Масштабируем
-	resizedImg := imaging.Resize(img, width, height, imaging.Lanczos)
+	// Масштабируем с сохранением пропорций (используем imaging.Fit)
+	resizedImg := imaging.Fit(img, width, height, imaging.Lanczos)
 
-	// Кодируем в память (используем bytes.Buffer)
+	// Кодируем в память
 	buf := new(bytes.Buffer)
 	switch format {
 	case "jpeg":
