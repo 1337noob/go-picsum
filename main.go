@@ -80,8 +80,8 @@ func serveImage(c *gin.Context, width, height int) {
 		return
 	}
 
-	// Масштабируем с сохранением пропорций (используем imaging.Fit)
-	resizedImg := imaging.Fit(img, width, height, imaging.Lanczos)
+	// Обрезаем и масштабируем до точных размеров (без растягивания)
+	resizedImg := imaging.Fill(img, width, height, imaging.Center, imaging.Lanczos)
 
 	// Кодируем в память
 	buf := new(bytes.Buffer)
